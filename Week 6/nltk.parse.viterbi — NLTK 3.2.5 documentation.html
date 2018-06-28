@@ -1,0 +1,504 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!-- saved from url=(0052)http://www.nltk.org/_modules/nltk/parse/viterbi.html -->
+<html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    
+    
+    <title>nltk.parse.viterbi — NLTK 3.2.5 documentation</title>
+    
+    <link rel="stylesheet" href="./nltk.parse.viterbi — NLTK 3.2.5 documentation_files/agogo.css" type="text/css">
+    <link rel="stylesheet" href="./nltk.parse.viterbi — NLTK 3.2.5 documentation_files/pygments.css" type="text/css">
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    '../../../',
+        VERSION:     '3.2.5',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
+      };
+    </script>
+    <script type="text/javascript" src="./nltk.parse.viterbi — NLTK 3.2.5 documentation_files/jquery.js"></script>
+    <script type="text/javascript" src="./nltk.parse.viterbi — NLTK 3.2.5 documentation_files/underscore.js"></script>
+    <script type="text/javascript" src="./nltk.parse.viterbi — NLTK 3.2.5 documentation_files/doctools.js"></script>
+    <link rel="index" title="Index" href="http://www.nltk.org/genindex.html">
+    <link rel="search" title="Search" href="http://www.nltk.org/search.html"> 
+  </head>
+  <body role="document">
+    <div class="header-wrapper" role="banner">
+      <div class="header">
+        <div class="headertitle"><a href="http://www.nltk.org/index.html">NLTK 3.2.5 documentation</a></div>
+        <div class="rel" role="navigation" aria-label="related navigation">
+          <a href="http://www.nltk.org/py-modindex.html" title="Python Module Index">modules</a> |
+          <a href="http://www.nltk.org/genindex.html" title="General Index" accesskey="I">index</a>
+        </div>
+       </div>
+    </div>
+
+    <div class="content-wrapper">
+      <div class="content">
+        <div class="document">
+            
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <h1>Source code for nltk.parse.viterbi</h1><div class="highlight"><pre><span></span><span class="c1"># Natural Language Toolkit: Viterbi Probabilistic Parser</span>
+<span class="c1">#</span>
+<span class="c1"># Copyright (C) 2001-2017 NLTK Project</span>
+<span class="c1"># Author: Edward Loper &lt;edloper@gmail.com&gt;</span>
+<span class="c1">#         Steven Bird &lt;stevenbird1@gmail.com&gt;</span>
+<span class="c1"># URL: &lt;http://nltk.org/&gt;</span>
+<span class="c1"># For license information, see LICENSE.TXT</span>
+<span class="kn">from</span> <span class="nn">__future__</span> <span class="k">import</span> <span class="n">print_function</span><span class="p">,</span> <span class="n">unicode_literals</span>
+
+<span class="kn">from</span> <span class="nn">functools</span> <span class="k">import</span> <span class="n">reduce</span>
+<span class="kn">from</span> <span class="nn">nltk.tree</span> <span class="k">import</span> <span class="n">Tree</span><span class="p">,</span> <span class="n">ProbabilisticTree</span>
+<span class="kn">from</span> <span class="nn">nltk.compat</span> <span class="k">import</span> <span class="n">python_2_unicode_compatible</span>
+
+<span class="kn">from</span> <span class="nn">nltk.parse.api</span> <span class="k">import</span> <span class="n">ParserI</span>
+
+<span class="c1">##//////////////////////////////////////////////////////</span>
+<span class="c1">##  Viterbi PCFG Parser</span>
+<span class="c1">##//////////////////////////////////////////////////////</span>
+
+<span class="nd">@python_2_unicode_compatible</span>
+<div class="viewcode-block" id="ViterbiParser"><a class="viewcode-back" href="http://www.nltk.org/api/nltk.parse.html#nltk.parse.viterbi.ViterbiParser">[docs]</a><span class="k">class</span> <span class="nc">ViterbiParser</span><span class="p">(</span><span class="n">ParserI</span><span class="p">):</span>
+    <span class="sd">"""</span>
+<span class="sd">    A bottom-up ``PCFG`` parser that uses dynamic programming to find</span>
+<span class="sd">    the single most likely parse for a text.  The ``ViterbiParser`` parser</span>
+<span class="sd">    parses texts by filling in a "most likely constituent table".</span>
+<span class="sd">    This table records the most probable tree representation for any</span>
+<span class="sd">    given span and node value.  In particular, it has an entry for</span>
+<span class="sd">    every start index, end index, and node value, recording the most</span>
+<span class="sd">    likely subtree that spans from the start index to the end index,</span>
+<span class="sd">    and has the given node value.</span>
+
+<span class="sd">    The ``ViterbiParser`` parser fills in this table incrementally.  It starts</span>
+<span class="sd">    by filling in all entries for constituents that span one element</span>
+<span class="sd">    of text (i.e., entries where the end index is one greater than the</span>
+<span class="sd">    start index).  After it has filled in all table entries for</span>
+<span class="sd">    constituents that span one element of text, it fills in the</span>
+<span class="sd">    entries for constitutants that span two elements of text.  It</span>
+<span class="sd">    continues filling in the entries for constituents spanning larger</span>
+<span class="sd">    and larger portions of the text, until the entire table has been</span>
+<span class="sd">    filled.  Finally, it returns the table entry for a constituent</span>
+<span class="sd">    spanning the entire text, whose node value is the grammar's start</span>
+<span class="sd">    symbol.</span>
+
+<span class="sd">    In order to find the most likely constituent with a given span and</span>
+<span class="sd">    node value, the ``ViterbiParser`` parser considers all productions that</span>
+<span class="sd">    could produce that node value.  For each production, it finds all</span>
+<span class="sd">    children that collectively cover the span and have the node values</span>
+<span class="sd">    specified by the production's right hand side.  If the probability</span>
+<span class="sd">    of the tree formed by applying the production to the children is</span>
+<span class="sd">    greater than the probability of the current entry in the table,</span>
+<span class="sd">    then the table is updated with this new tree.</span>
+
+<span class="sd">    A pseudo-code description of the algorithm used by</span>
+<span class="sd">    ``ViterbiParser`` is:</span>
+
+<span class="sd">    | Create an empty most likely constituent table, *MLC*.</span>
+<span class="sd">    | For width in 1...len(text):</span>
+<span class="sd">    |   For start in 1...len(text)-width:</span>
+<span class="sd">    |     For prod in grammar.productions:</span>
+<span class="sd">    |       For each sequence of subtrees [t[1], t[2], ..., t[n]] in MLC,</span>
+<span class="sd">    |         where t[i].label()==prod.rhs[i],</span>
+<span class="sd">    |         and the sequence covers [start:start+width]:</span>
+<span class="sd">    |           old_p = MLC[start, start+width, prod.lhs]</span>
+<span class="sd">    |           new_p = P(t[1])P(t[1])...P(t[n])P(prod)</span>
+<span class="sd">    |           if new_p &gt; old_p:</span>
+<span class="sd">    |             new_tree = Tree(prod.lhs, t[1], t[2], ..., t[n])</span>
+<span class="sd">    |             MLC[start, start+width, prod.lhs] = new_tree</span>
+<span class="sd">    | Return MLC[0, len(text), start_symbol]</span>
+
+<span class="sd">    :type _grammar: PCFG</span>
+<span class="sd">    :ivar _grammar: The grammar used to parse sentences.</span>
+<span class="sd">    :type _trace: int</span>
+<span class="sd">    :ivar _trace: The level of tracing output that should be generated</span>
+<span class="sd">        when parsing a text.</span>
+<span class="sd">    """</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">grammar</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="sd">"""</span>
+<span class="sd">        Create a new ``ViterbiParser`` parser, that uses ``grammar`` to</span>
+<span class="sd">        parse texts.</span>
+
+<span class="sd">        :type grammar: PCFG</span>
+<span class="sd">        :param grammar: The grammar used to parse texts.</span>
+<span class="sd">        :type trace: int</span>
+<span class="sd">        :param trace: The level of tracing that should be used when</span>
+<span class="sd">            parsing a text.  ``0`` will generate no tracing output;</span>
+<span class="sd">            and higher numbers will produce more verbose tracing</span>
+<span class="sd">            output.</span>
+<span class="sd">        """</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_grammar</span> <span class="o">=</span> <span class="n">grammar</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span> <span class="o">=</span> <span class="n">trace</span>
+
+<div class="viewcode-block" id="ViterbiParser.grammar"><a class="viewcode-back" href="http://www.nltk.org/api/nltk.parse.html#nltk.parse.viterbi.ViterbiParser.grammar">[docs]</a>    <span class="k">def</span> <span class="nf">grammar</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grammar</span></div>
+
+<div class="viewcode-block" id="ViterbiParser.trace"><a class="viewcode-back" href="http://www.nltk.org/api/nltk.parse.html#nltk.parse.viterbi.ViterbiParser.trace">[docs]</a>    <span class="k">def</span> <span class="nf">trace</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="mi">2</span><span class="p">):</span>
+        <span class="sd">"""</span>
+<span class="sd">        Set the level of tracing output that should be generated when</span>
+<span class="sd">        parsing a text.</span>
+
+<span class="sd">        :type trace: int</span>
+<span class="sd">        :param trace: The trace level.  A trace level of ``0`` will</span>
+<span class="sd">            generate no tracing output; and higher trace levels will</span>
+<span class="sd">            produce more verbose tracing output.</span>
+<span class="sd">        :rtype: None</span>
+<span class="sd">        """</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span> <span class="o">=</span> <span class="n">trace</span></div>
+
+<div class="viewcode-block" id="ViterbiParser.parse"><a class="viewcode-back" href="http://www.nltk.org/api/nltk.parse.html#nltk.parse.viterbi.ViterbiParser.parse">[docs]</a>    <span class="k">def</span> <span class="nf">parse</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tokens</span><span class="p">):</span>
+        <span class="c1"># Inherit docs from ParserI</span>
+
+        <span class="n">tokens</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_grammar</span><span class="o">.</span><span class="n">check_coverage</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>
+
+        <span class="c1"># The most likely constituent table.  This table specifies the</span>
+        <span class="c1"># most likely constituent for a given span and type.</span>
+        <span class="c1"># Constituents can be either Trees or tokens.  For Trees,</span>
+        <span class="c1"># the "type" is the Nonterminal for the tree's root node</span>
+        <span class="c1"># value.  For Tokens, the "type" is the token's type.</span>
+        <span class="c1"># The table is stored as a dictionary, since it is sparse.</span>
+        <span class="n">constituents</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="c1"># Initialize the constituents dictionary with the words from</span>
+        <span class="c1"># the text.</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span><span class="p">:</span> <span class="nb">print</span><span class="p">((</span><span class="s1">'Inserting tokens into the most likely'</span><span class="o">+</span>
+                               <span class="s1">' constituents table...'</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">)):</span>
+            <span class="n">token</span> <span class="o">=</span> <span class="n">tokens</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+            <span class="n">constituents</span><span class="p">[</span><span class="n">index</span><span class="p">,</span><span class="n">index</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span><span class="n">token</span><span class="p">]</span> <span class="o">=</span> <span class="n">token</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_trace_lexical_insertion</span><span class="p">(</span><span class="n">token</span><span class="p">,</span> <span class="n">index</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">))</span>
+
+        <span class="c1"># Consider each span of length 1, 2, ..., n; and add any trees</span>
+        <span class="c1"># that might cover that span to the constituents dictionary.</span>
+        <span class="k">for</span> <span class="n">length</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">((</span><span class="s1">'Finding the most likely constituents'</span><span class="o">+</span>
+                       <span class="s1">' spanning </span><span class="si">%d</span><span class="s1"> text elements...'</span> <span class="o">%</span> <span class="n">length</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">start</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span><span class="o">-</span><span class="n">length</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+                <span class="n">span</span> <span class="o">=</span> <span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">start</span><span class="o">+</span><span class="n">length</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_add_constituents_spanning</span><span class="p">(</span><span class="n">span</span><span class="p">,</span> <span class="n">constituents</span><span class="p">,</span>
+                                                <span class="n">tokens</span><span class="p">)</span>
+
+        <span class="c1"># Return the tree that spans the entire text &amp; have the right cat</span>
+        <span class="n">tree</span> <span class="o">=</span> <span class="n">constituents</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grammar</span><span class="o">.</span><span class="n">start</span><span class="p">()))</span>
+        <span class="k">if</span> <span class="n">tree</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">yield</span> <span class="n">tree</span></div>
+
+    <span class="k">def</span> <span class="nf">_add_constituents_spanning</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">span</span><span class="p">,</span> <span class="n">constituents</span><span class="p">,</span> <span class="n">tokens</span><span class="p">):</span>
+        <span class="sd">"""</span>
+<span class="sd">        Find any constituents that might cover ``span``, and add them</span>
+<span class="sd">        to the most likely constituents table.</span>
+
+<span class="sd">        :rtype: None</span>
+<span class="sd">        :type span: tuple(int, int)</span>
+<span class="sd">        :param span: The section of the text for which we are</span>
+<span class="sd">            trying to find possible constituents.  The span is</span>
+<span class="sd">            specified as a pair of integers, where the first integer</span>
+<span class="sd">            is the index of the first token that should be included in</span>
+<span class="sd">            the constituent; and the second integer is the index of</span>
+<span class="sd">            the first token that should not be included in the</span>
+<span class="sd">            constituent.  I.e., the constituent should cover</span>
+<span class="sd">            ``text[span[0]:span[1]]``, where ``text`` is the text</span>
+<span class="sd">            that we are parsing.</span>
+
+<span class="sd">        :type constituents: dict(tuple(int,int,Nonterminal) -&gt; ProbabilisticToken or ProbabilisticTree)</span>
+<span class="sd">        :param constituents: The most likely constituents table.  This</span>
+<span class="sd">            table records the most probable tree representation for</span>
+<span class="sd">            any given span and node value.  In particular,</span>
+<span class="sd">            ``constituents(s,e,nv)`` is the most likely</span>
+<span class="sd">            ``ProbabilisticTree`` that covers ``text[s:e]``</span>
+<span class="sd">            and has a node value ``nv.symbol()``, where ``text``</span>
+<span class="sd">            is the text that we are parsing.  When</span>
+<span class="sd">            ``_add_constituents_spanning`` is called, ``constituents``</span>
+<span class="sd">            should contain all possible constituents that are shorter</span>
+<span class="sd">            than ``span``.</span>
+
+<span class="sd">        :type tokens: list of tokens</span>
+<span class="sd">        :param tokens: The text we are parsing.  This is only used for</span>
+<span class="sd">            trace output.</span>
+<span class="sd">        """</span>
+        <span class="c1"># Since some of the grammar productions may be unary, we need to</span>
+        <span class="c1"># repeatedly try all of the productions until none of them add any</span>
+        <span class="c1"># new constituents.</span>
+        <span class="n">changed</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">while</span> <span class="n">changed</span><span class="p">:</span>
+            <span class="n">changed</span> <span class="o">=</span> <span class="kc">False</span>
+
+            <span class="c1"># Find all ways instantiations of the grammar productions that</span>
+            <span class="c1"># cover the span.</span>
+            <span class="n">instantiations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_find_instantiations</span><span class="p">(</span><span class="n">span</span><span class="p">,</span> <span class="n">constituents</span><span class="p">)</span>
+
+            <span class="c1"># For each production instantiation, add a new</span>
+            <span class="c1"># ProbabilisticTree whose probability is the product</span>
+            <span class="c1"># of the childrens' probabilities and the production's</span>
+            <span class="c1"># probability.</span>
+            <span class="k">for</span> <span class="p">(</span><span class="n">production</span><span class="p">,</span> <span class="n">children</span><span class="p">)</span> <span class="ow">in</span> <span class="n">instantiations</span><span class="p">:</span>
+                <span class="n">subtrees</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">children</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">Tree</span><span class="p">)]</span>
+                <span class="n">p</span> <span class="o">=</span> <span class="n">reduce</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pr</span><span class="p">,</span><span class="n">t</span><span class="p">:</span><span class="n">pr</span><span class="o">*</span><span class="n">t</span><span class="o">.</span><span class="n">prob</span><span class="p">(),</span>
+                           <span class="n">subtrees</span><span class="p">,</span> <span class="n">production</span><span class="o">.</span><span class="n">prob</span><span class="p">())</span>
+                <span class="n">node</span> <span class="o">=</span> <span class="n">production</span><span class="o">.</span><span class="n">lhs</span><span class="p">()</span><span class="o">.</span><span class="n">symbol</span><span class="p">()</span>
+                <span class="n">tree</span> <span class="o">=</span> <span class="n">ProbabilisticTree</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">children</span><span class="p">,</span> <span class="n">prob</span><span class="o">=</span><span class="n">p</span><span class="p">)</span>
+
+                <span class="c1"># If it's new a constituent, then add it to the</span>
+                <span class="c1"># constituents dictionary.</span>
+                <span class="n">c</span> <span class="o">=</span> <span class="n">constituents</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="n">span</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">span</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">production</span><span class="o">.</span><span class="n">lhs</span><span class="p">()))</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">c</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">c</span> <span class="o">!=</span> <span class="n">tree</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="n">c</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">c</span><span class="o">.</span><span class="n">prob</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">tree</span><span class="o">.</span><span class="n">prob</span><span class="p">():</span>
+                            <span class="nb">print</span><span class="p">(</span><span class="s1">'   Insert:'</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s1">' '</span><span class="p">)</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="nb">print</span><span class="p">(</span><span class="s1">'  Discard:'</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s1">' '</span><span class="p">)</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_trace_production</span><span class="p">(</span><span class="n">production</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">span</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">tokens</span><span class="p">))</span>
+                <span class="k">if</span> <span class="n">c</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">c</span><span class="o">.</span><span class="n">prob</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">tree</span><span class="o">.</span><span class="n">prob</span><span class="p">():</span>
+                    <span class="n">constituents</span><span class="p">[</span><span class="n">span</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">span</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">production</span><span class="o">.</span><span class="n">lhs</span><span class="p">()]</span> <span class="o">=</span> <span class="n">tree</span>
+                    <span class="n">changed</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="nf">_find_instantiations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">span</span><span class="p">,</span> <span class="n">constituents</span><span class="p">):</span>
+        <span class="sd">"""</span>
+<span class="sd">        :return: a list of the production instantiations that cover a</span>
+<span class="sd">            given span of the text.  A "production instantiation" is</span>
+<span class="sd">            a tuple containing a production and a list of children,</span>
+<span class="sd">            where the production's right hand side matches the list of</span>
+<span class="sd">            children; and the children cover ``span``.  :rtype: list</span>
+<span class="sd">            of ``pair`` of ``Production``, (list of</span>
+<span class="sd">            (``ProbabilisticTree`` or token.</span>
+
+<span class="sd">        :type span: tuple(int, int)</span>
+<span class="sd">        :param span: The section of the text for which we are</span>
+<span class="sd">            trying to find production instantiations.  The span is</span>
+<span class="sd">            specified as a pair of integers, where the first integer</span>
+<span class="sd">            is the index of the first token that should be covered by</span>
+<span class="sd">            the production instantiation; and the second integer is</span>
+<span class="sd">            the index of the first token that should not be covered by</span>
+<span class="sd">            the production instantiation.</span>
+<span class="sd">        :type constituents: dict(tuple(int,int,Nonterminal) -&gt; ProbabilisticToken or ProbabilisticTree)</span>
+<span class="sd">        :param constituents: The most likely constituents table.  This</span>
+<span class="sd">            table records the most probable tree representation for</span>
+<span class="sd">            any given span and node value.  See the module</span>
+<span class="sd">            documentation for more information.</span>
+<span class="sd">        """</span>
+        <span class="n">rv</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">production</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grammar</span><span class="o">.</span><span class="n">productions</span><span class="p">():</span>
+            <span class="n">childlists</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_match_rhs</span><span class="p">(</span><span class="n">production</span><span class="o">.</span><span class="n">rhs</span><span class="p">(),</span> <span class="n">span</span><span class="p">,</span> <span class="n">constituents</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">childlist</span> <span class="ow">in</span> <span class="n">childlists</span><span class="p">:</span>
+                <span class="n">rv</span><span class="o">.</span><span class="n">append</span><span class="p">(</span> <span class="p">(</span><span class="n">production</span><span class="p">,</span> <span class="n">childlist</span><span class="p">)</span> <span class="p">)</span>
+        <span class="k">return</span> <span class="n">rv</span>
+
+    <span class="k">def</span> <span class="nf">_match_rhs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rhs</span><span class="p">,</span> <span class="n">span</span><span class="p">,</span> <span class="n">constituents</span><span class="p">):</span>
+        <span class="sd">"""</span>
+<span class="sd">        :return: a set of all the lists of children that cover ``span``</span>
+<span class="sd">            and that match ``rhs``.</span>
+<span class="sd">        :rtype: list(list(ProbabilisticTree or token)</span>
+
+<span class="sd">        :type rhs: list(Nonterminal or any)</span>
+<span class="sd">        :param rhs: The list specifying what kinds of children need to</span>
+<span class="sd">            cover ``span``.  Each nonterminal in ``rhs`` specifies</span>
+<span class="sd">            that the corresponding child should be a tree whose node</span>
+<span class="sd">            value is that nonterminal's symbol.  Each terminal in ``rhs``</span>
+<span class="sd">            specifies that the corresponding child should be a token</span>
+<span class="sd">            whose type is that terminal.</span>
+<span class="sd">        :type span: tuple(int, int)</span>
+<span class="sd">        :param span: The section of the text for which we are</span>
+<span class="sd">            trying to find child lists.  The span is specified as a</span>
+<span class="sd">            pair of integers, where the first integer is the index of</span>
+<span class="sd">            the first token that should be covered by the child list;</span>
+<span class="sd">            and the second integer is the index of the first token</span>
+<span class="sd">            that should not be covered by the child list.</span>
+<span class="sd">        :type constituents: dict(tuple(int,int,Nonterminal) -&gt; ProbabilisticToken or ProbabilisticTree)</span>
+<span class="sd">        :param constituents: The most likely constituents table.  This</span>
+<span class="sd">            table records the most probable tree representation for</span>
+<span class="sd">            any given span and node value.  See the module</span>
+<span class="sd">            documentation for more information.</span>
+<span class="sd">        """</span>
+        <span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span> <span class="o">=</span> <span class="n">span</span>
+
+        <span class="c1"># Base case</span>
+        <span class="k">if</span> <span class="n">start</span> <span class="o">&gt;=</span> <span class="n">end</span> <span class="ow">and</span> <span class="n">rhs</span> <span class="o">==</span> <span class="p">():</span> <span class="k">return</span> <span class="p">[[]]</span>
+        <span class="k">if</span> <span class="n">start</span> <span class="o">&gt;=</span> <span class="n">end</span> <span class="ow">or</span> <span class="n">rhs</span> <span class="o">==</span> <span class="p">():</span> <span class="k">return</span> <span class="p">[]</span>
+
+        <span class="c1"># Find everything that matches the 1st symbol of the RHS</span>
+        <span class="n">childlists</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">split</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+            <span class="n">l</span><span class="o">=</span><span class="n">constituents</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="n">start</span><span class="p">,</span><span class="n">split</span><span class="p">,</span><span class="n">rhs</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+            <span class="k">if</span> <span class="n">l</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">rights</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_match_rhs</span><span class="p">(</span><span class="n">rhs</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="p">(</span><span class="n">split</span><span class="p">,</span><span class="n">end</span><span class="p">),</span> <span class="n">constituents</span><span class="p">)</span>
+                <span class="n">childlists</span> <span class="o">+=</span> <span class="p">[[</span><span class="n">l</span><span class="p">]</span><span class="o">+</span><span class="n">r</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rights</span><span class="p">]</span>
+
+        <span class="k">return</span> <span class="n">childlists</span>
+
+    <span class="k">def</span> <span class="nf">_trace_production</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">production</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">span</span><span class="p">,</span> <span class="n">width</span><span class="p">):</span>
+        <span class="sd">"""</span>
+<span class="sd">        Print trace output indicating that a given production has been</span>
+<span class="sd">        applied at a given location.</span>
+
+<span class="sd">        :param production: The production that has been applied</span>
+<span class="sd">        :type production: Production</span>
+<span class="sd">        :param p: The probability of the tree produced by the production.</span>
+<span class="sd">        :type p: float</span>
+<span class="sd">        :param span: The span of the production</span>
+<span class="sd">        :type span: tuple</span>
+<span class="sd">        :rtype: None</span>
+<span class="sd">        """</span>
+
+        <span class="nb">str</span> <span class="o">=</span> <span class="s1">'|'</span> <span class="o">+</span> <span class="s1">'.'</span> <span class="o">*</span> <span class="n">span</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="nb">str</span> <span class="o">+=</span> <span class="s1">'='</span> <span class="o">*</span> <span class="p">(</span><span class="n">span</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">span</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="nb">str</span> <span class="o">+=</span> <span class="s1">'.'</span> <span class="o">*</span> <span class="p">(</span><span class="n">width</span> <span class="o">-</span> <span class="n">span</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">+</span> <span class="s1">'| '</span>
+        <span class="nb">str</span> <span class="o">+=</span> <span class="s1">'</span><span class="si">%s</span><span class="s1">'</span> <span class="o">%</span> <span class="n">production</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_trace</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">'</span><span class="si">%-40s</span><span class="s1"> </span><span class="si">%12.10f</span><span class="s1"> '</span> <span class="o">%</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">p</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_trace_lexical_insertion</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">token</span><span class="p">,</span> <span class="n">index</span><span class="p">,</span> <span class="n">width</span><span class="p">):</span>
+        <span class="nb">str</span> <span class="o">=</span> <span class="s1">'   Insert: |'</span> <span class="o">+</span> <span class="s1">'.'</span> <span class="o">*</span> <span class="n">index</span> <span class="o">+</span> <span class="s1">'='</span> <span class="o">+</span> <span class="s1">'.'</span> <span class="o">*</span> <span class="p">(</span><span class="n">width</span><span class="o">-</span><span class="n">index</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'| '</span>
+        <span class="nb">str</span> <span class="o">+=</span> <span class="s1">'</span><span class="si">%s</span><span class="s1">'</span> <span class="o">%</span> <span class="p">(</span><span class="n">token</span><span class="p">,)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">'&lt;ViterbiParser for </span><span class="si">%r</span><span class="s1">&gt;'</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">_grammar</span></div>
+
+
+<span class="c1">##//////////////////////////////////////////////////////</span>
+<span class="c1">##  Test Code</span>
+<span class="c1">##//////////////////////////////////////////////////////</span>
+
+<div class="viewcode-block" id="demo"><a class="viewcode-back" href="http://www.nltk.org/api/nltk.parse.html#nltk.parse.viterbi.demo">[docs]</a><span class="k">def</span> <span class="nf">demo</span><span class="p">():</span>
+    <span class="sd">"""</span>
+<span class="sd">    A demonstration of the probabilistic parsers.  The user is</span>
+<span class="sd">    prompted to select which demo to run, and how many parses should</span>
+<span class="sd">    be found; and then each parser is run on the same demo, and a</span>
+<span class="sd">    summary of the results are displayed.</span>
+<span class="sd">    """</span>
+    <span class="kn">import</span> <span class="nn">sys</span><span class="o">,</span> <span class="nn">time</span>
+    <span class="kn">from</span> <span class="nn">nltk</span> <span class="k">import</span> <span class="n">tokenize</span>
+    <span class="kn">from</span> <span class="nn">nltk.parse</span> <span class="k">import</span> <span class="n">ViterbiParser</span>
+    <span class="kn">from</span> <span class="nn">nltk.grammar</span> <span class="k">import</span> <span class="n">toy_pcfg1</span><span class="p">,</span> <span class="n">toy_pcfg2</span>
+
+    <span class="c1"># Define two demos.  Each demo has a sentence and a grammar.</span>
+    <span class="n">demos</span> <span class="o">=</span> <span class="p">[(</span><span class="s1">'I saw the man with my telescope'</span><span class="p">,</span> <span class="n">toy_pcfg1</span><span class="p">),</span>
+             <span class="p">(</span><span class="s1">'the boy saw Jack with Bob under the table with a telescope'</span><span class="p">,</span> <span class="n">toy_pcfg2</span><span class="p">)]</span>
+
+    <span class="c1"># Ask the user which demo they want to use.</span>
+    <span class="nb">print</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">demos</span><span class="p">)):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="si">%3s</span><span class="s1">: </span><span class="si">%s</span><span class="s1">'</span> <span class="o">%</span> <span class="p">(</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">demos</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">'     </span><span class="si">%r</span><span class="s1">'</span> <span class="o">%</span> <span class="n">demos</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">1</span><span class="p">])</span>
+        <span class="nb">print</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'Which demo (</span><span class="si">%d</span><span class="s1">-</span><span class="si">%d</span><span class="s1">)? '</span> <span class="o">%</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">demos</span><span class="p">)),</span> <span class="n">end</span><span class="o">=</span><span class="s1">' '</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">snum</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">stdin</span><span class="o">.</span><span class="n">readline</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span><span class="o">-</span><span class="mi">1</span>
+        <span class="n">sent</span><span class="p">,</span> <span class="n">grammar</span> <span class="o">=</span> <span class="n">demos</span><span class="p">[</span><span class="n">snum</span><span class="p">]</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">'Bad sentence number'</span><span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="c1"># Tokenize the sentence.</span>
+    <span class="n">tokens</span> <span class="o">=</span> <span class="n">sent</span><span class="o">.</span><span class="n">split</span><span class="p">()</span>
+
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">ViterbiParser</span><span class="p">(</span><span class="n">grammar</span><span class="p">)</span>
+    <span class="n">all_parses</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="se">\n</span><span class="s1">sent: </span><span class="si">%s</span><span class="se">\n</span><span class="s1">parser: </span><span class="si">%s</span><span class="se">\n</span><span class="s1">grammar: </span><span class="si">%s</span><span class="s1">'</span> <span class="o">%</span> <span class="p">(</span><span class="n">sent</span><span class="p">,</span><span class="n">parser</span><span class="p">,</span><span class="n">grammar</span><span class="p">))</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">trace</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">t</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">parses</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_all</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>
+    <span class="n">time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span><span class="o">-</span><span class="n">t</span>
+    <span class="n">average</span> <span class="o">=</span> <span class="p">(</span><span class="n">reduce</span><span class="p">(</span><span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">a</span><span class="o">+</span><span class="n">b</span><span class="o">.</span><span class="n">prob</span><span class="p">(),</span> <span class="n">parses</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span><span class="o">/</span><span class="nb">len</span><span class="p">(</span><span class="n">parses</span><span class="p">)</span>
+               <span class="k">if</span> <span class="n">parses</span> <span class="k">else</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_parses</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">parses</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">parses</span><span class="p">:</span>
+        <span class="n">all_parses</span><span class="p">[</span><span class="n">p</span><span class="o">.</span><span class="n">freeze</span><span class="p">()]</span> <span class="o">=</span> <span class="mi">1</span>
+
+    <span class="c1"># Print some summary statistics</span>
+    <span class="nb">print</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'Time (secs)   # Parses   Average P(parse)'</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'-----------------------------------------'</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="si">%11.4f%11d%19.14f</span><span class="s1">'</span> <span class="o">%</span> <span class="p">(</span><span class="n">time</span><span class="p">,</span> <span class="n">num_parses</span><span class="p">,</span> <span class="n">average</span><span class="p">))</span>
+    <span class="n">parses</span> <span class="o">=</span> <span class="n">all_parses</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">parses</span><span class="p">:</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">reduce</span><span class="p">(</span><span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">a</span><span class="o">+</span><span class="n">b</span><span class="o">.</span><span class="n">prob</span><span class="p">(),</span> <span class="n">parses</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span><span class="o">/</span><span class="nb">len</span><span class="p">(</span><span class="n">parses</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span> <span class="n">p</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'------------------------------------------'</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'</span><span class="si">%11s%11d%19.14f</span><span class="s1">'</span> <span class="o">%</span> <span class="p">(</span><span class="s1">'n/a'</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">parses</span><span class="p">),</span> <span class="n">p</span><span class="p">))</span>
+
+    <span class="c1"># Ask the user if we should draw the parses.</span>
+    <span class="nb">print</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'Draw parses (y/n)? '</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s1">' '</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">stdin</span><span class="o">.</span><span class="n">readline</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">'y'</span><span class="p">):</span>
+        <span class="kn">from</span> <span class="nn">nltk.draw.tree</span> <span class="k">import</span> <span class="n">draw_trees</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">'  please wait...'</span><span class="p">)</span>
+        <span class="n">draw_trees</span><span class="p">(</span><span class="o">*</span><span class="n">parses</span><span class="p">)</span>
+
+    <span class="c1"># Ask the user if we should print the parses.</span>
+    <span class="nb">print</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s1">'Print parses (y/n)? '</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s1">' '</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">stdin</span><span class="o">.</span><span class="n">readline</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">'y'</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">parse</span> <span class="ow">in</span> <span class="n">parses</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">parse</span><span class="p">)</span></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">'__main__'</span><span class="p">:</span>
+    <span class="n">demo</span><span class="p">()</span>
+</pre></div>
+
+          </div>
+        </div>
+      </div>
+        </div>
+        <div class="sidebar">
+          <h3>Table Of Contents</h3>
+          <ul>
+<li class="toctree-l1"><a class="reference internal" href="http://www.nltk.org/news.html">NLTK News</a></li>
+<li class="toctree-l1"><a class="reference internal" href="http://www.nltk.org/install.html">Installing NLTK</a></li>
+<li class="toctree-l1"><a class="reference internal" href="http://www.nltk.org/data.html">Installing NLTK Data</a></li>
+<li class="toctree-l1"><a class="reference internal" href="http://www.nltk.org/contribute.html">Contribute to NLTK</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/nltk/nltk/wiki/FAQ">FAQ</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/nltk/nltk/wiki">Wiki</a></li>
+<li class="toctree-l1"><a class="reference internal" href="http://www.nltk.org/api/nltk.html">API</a></li>
+<li class="toctree-l1"><a class="reference external" href="http://www.nltk.org/howto">HOWTO</a></li>
+</ul>
+
+          <div role="search">
+            <h3 style="margin-top: 1.5em;">Search</h3>
+            <form class="search" action="http://www.nltk.org/search.html" method="get">
+                <input type="text" name="q">
+                <input type="submit" value="Go">
+                <input type="hidden" name="check_keywords" value="yes">
+                <input type="hidden" name="area" value="default">
+            </form>
+          </div>
+        </div>
+        <div class="clearer"></div>
+      </div>
+    </div>
+
+    <div class="footer-wrapper">
+      <div class="footer">
+        <div class="left">
+          <div role="navigation" aria-label="related navigaton">
+            <a href="http://www.nltk.org/py-modindex.html" title="Python Module Index">modules</a> |
+            <a href="http://www.nltk.org/genindex.html" title="General Index">index</a>
+          </div>
+          <div role="note" aria-label="source link">
+          </div>
+        </div>
+
+        <div class="right">
+          
+    <div class="footer" role="contentinfo">
+        © Copyright 2017, NLTK Project.
+      Last updated on Sep 24, 2017.
+      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 1.5.5.
+    </div>
+        </div>
+        <div class="clearer"></div>
+      </div>
+    </div>
+
+  
+</body></html>
